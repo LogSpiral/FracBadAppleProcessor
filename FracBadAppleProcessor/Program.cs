@@ -1,20 +1,77 @@
-﻿using Microsoft.VisualBasic;
-using SixLabors.ImageSharp;
+﻿using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.Memory;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 using SixLabors.ImageSharp.Processing.Processors;
-using SixLabors.ImageSharp.Processing.Processors.Binarization;
-using System.Data;
-using System.Diagnostics;
 using System.Numerics;
-using System.Runtime.CompilerServices;
-namespace FracBadAppleProfessor 
+namespace FracBadAppleProfessor
 {
     //我因为预先知道我文件都塞在哪个位置，所以路径相关的直接就代码里硬编码了((((
     internal class Program
     {
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="args">输入的文件的路径们</param>
+        static void Main(string[] args)
+        {
+            int count = args.Length;
+            if (count == 0) 
+            {
+                Console.WriteLine("请尝试拖入一些Png给exe来处理吧");
+                return;
+            }
+            Console.WriteLine("请输入相应数字来执行相应功能");
+            Console.WriteLine("0 将画面进行裁切(3840x2160→2880x2160)");
+            Console.WriteLine("1 将画面阈值处理，亮度高于0.33的改成白色，否则是黑色，亮度∈[0,1]");
+            Console.WriteLine("2 将 黑白 画面进行距离场处理，计算每个像素到最近的白色像素的距离的平方并且以颜色形式存储");
+            Console.WriteLine("3 将 距离场 图进行分形映射处理");
+            Console.WriteLine("4 除了裁切以外的一条龙服务，适用于大多数图(图片亮度太低会在1处理成纯黑然后2炸掉)");
+        Label:
+            string mode = Console.ReadLine();
+            Action<Image>? processor = mode switch
+            {
+                "0" => image => image.Mutate(x => x.Crop(new Rectangle(480, 0, 2880, 2160))),
+                "1" => image => image.Mutate(x => x.BinaryThreshold(0.33f)),
+                "2" => image => image.Mutate(x => x.DistanceField()),
+                "3" => image => image.Mutate(x => x.FractalRender()),
+                "4" => image => image.Mutate(x => x.BinaryThreshold(0.33f).DistanceField().FractalRender()),
+                _ => null
+            };
+            if (processor == null)
+            {
+                Console.WriteLine("不认识的数字呢。请重新输入一遍吧");
+                goto Label;
+            }
+            Console.WriteLine("请耐心等待处理，多于1000张时每处理100张会输出一次进度，否则多于10张时每10张输出一次进度");
+            int counter = 0;
+            foreach (var file in args)
+            {
+                using Image image = Image.Load(file);
+                processor(image);
+                var path = Path.GetDirectoryName(file) + "\\Result";
+                if (!Directory.Exists(path))
+                    Directory.CreateDirectory(path);
+                ImageExtensions.SaveAsPng(image, $"{path}\\{Path.GetFileName(file)}");
+                counter++;
+                if (count > 1000 && counter % 100 == 0)
+                {
+                    Console.WriteLine($"{counter * 100f / count:0.00}%");
+                }
+                else if (count > 10 && counter % 10 == 0) 
+                {
+                    Console.WriteLine($"{counter * 100f / count:0.00}%");
+                }
+            }
+            Console.WriteLine($"处理成功，已处理{count}个文件，请查看它们自己目录下的Result文件夹");
+            Console.WriteLine("输入任意按键退出");
+            Console.ReadKey();
+        }
+        //上面这个是面向公开代码而写的Main函数
+
+        //下面这些是我用来生成分形BA的程序，因为我知道文件放哪所以路径硬编码了
+        /*
         static void BlackWhite()
         {
             string path = "D:\\baTest\\";
@@ -76,12 +133,12 @@ namespace FracBadAppleProfessor
             //});//这里是把纯黑的那几张改个名直接复制到最终的输出文件夹
             return;
         }
-
+        */
 
     }
 
     //通过拓展函数方便调用下面两个处理器，仅此而已
-    public static class LogSpiralProcessorExtension
+    public static class FracBadAppleProfessorExtension
     {
         public static IImageProcessingContext FractalRender(this IImageProcessingContext source, float offsetAngle = 0f)
     => source.ApplyProcessor(new FractalProcessor(offsetAngle));
@@ -235,7 +292,7 @@ namespace FracBadAppleProfessor
         //照着这个顺序依次检测就能找到离某点最近的目标点，从而得到这个点处的距离值
         //后面的点在这个点的基础上计算就能大大降低计算量(不然大抵是O(n^3)罢((
 
-        
+
         public SDFProcessor(Configuration configuration, Image<TPixel> source, Rectangle sourceRectangle) : base(configuration, source, sourceRectangle)
         {
 
@@ -664,5 +721,55 @@ namespace FracBadAppleProfessor
 
             ESSEDT(source);
         }
+
+
+
+
+        //距离场图的生成函数，那会我还在用System.Common.Drawing，所以是这样的代码
+        /*
+         static void SpawnDataSet()
+        {
+            Dictionary<int, List<Point>> dict = new Dictionary<int, List<Point>>();
+            List<Point> points = new List<Point>();
+            const int widthMax = 256;
+            int max = widthMax - 1;
+            for (int m = 0; m < max; m++)
+            {
+                for (int n = 0; n <= m; n++)
+                {
+                    //Console.WriteLine(new Point(m, n));
+                    points.Add(new Point(m, n));
+                }
+            }
+            foreach (var p in points)
+            {
+                int key = PointLengthSquare(p);
+                if (!dict.ContainsKey(key))
+                    dict.Add(key, new List<Point>());
+                var list = dict[key];
+                list.Add(p);
+            }
+            var array = dict.OrderBy(pair => pair.Key).ToArray();
+            points.Clear();
+            foreach (var l in array)
+                points.AddRange(l.Value);
+            using Bitmap map2 = new Bitmap(Math.Min(points.Count, widthMax), (int)Math.Pow(2, (int)Math.Log2(points.Count / widthMax + 1) + 1) * 2);
+            //string data = "{";
+
+            for (int n = 0; n < points.Count; n++)
+            {
+                var p = points[n];
+                int off = n / widthMax;
+                //data += $"{p.X * p.X + p.Y * p.Y},";
+                //Console.WriteLine((n, p.X * p.X + p.Y * p.Y));
+                map2.SetPixel(n % widthMax, off * 2, IntToColor(p.X));
+                map2.SetPixel(n % widthMax, off * 2 + 1, IntToColor(p.Y));
+
+            }
+            //data += "}";
+            //File.WriteAllText("C:\\Users\\Administrator\\Documents\\distanceSet2.txt", data);
+            map2.Save($"C:\\Users\\Administrator\\Documents\\dataSet{widthMax}.png");
+        }
+         */
     }
 }
